@@ -1,0 +1,47 @@
+# ── Environment & secrets ─────────────────────────────────────────────────────
+.env
+
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+
+# ── Virtual environments ──────────────────────────────────────────────────────
+venv/
+.venv/
+env/
+.env/
+
+# ── Data files (user-supplied input / pipeline output) ───────────────────────
+data/*.json
+data/*.txt
+data/*.csv
+# Keep the README that explains the data folder
+!data/README.txt
+
+# ── Pipeline output at repo root (if run outside Docker) ─────────────────────
+results.json
+report.txt
+
+# ── OS junk ──────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Editors ──────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ── Docker ───────────────────────────────────────────────────────────────────
+# docker-compose.override.yml is intentionally excluded if used for local tweaks
+docker-compose.override.yml

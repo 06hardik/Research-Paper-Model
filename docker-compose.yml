@@ -1,0 +1,60 @@
+version: "3.9"
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Reference Section Quality Pipeline
+#
+#  Services:
+#    extraction-engine  — field extraction model (internal network only)
+#    pipeline           — Python quality checks and reporting
+#
+#  Quick start (collaborator):
+#    1. docker compose pull
+#    2. docker compose up -d extraction-engine
+#    3. docker compose run --rm pipeline /data/input.json \
+#         --output /data/results.json --report /data/report.txt
+#
+#  Set EXTRACTOR_IMAGE in a .env file or export it before running:
+#    EXTRACTOR_IMAGE=ghcr.io/06hardik/extraction-engine:1.0
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+
+  # ── Field extraction model ─────────────────────────────────────────────────
+  # This service is NOT exposed on any host port — it is reachable only by the
+  # pipeline container on the internal Docker bridge network.
+  extraction-engine:
+    image: ${EXTRACTOR_IMAGE:?Set EXTRACTOR_IMAGE in .env or environment}
+    restart: unless-stopped
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8070/api/isalive || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 45s   # GROBID JVM startup takes ~30-40 seconds
+
+  # ── Python pipeline ────────────────────────────────────────────────────────
+  pipeline:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      # Points at the extraction-engine container via Docker's internal DNS.
+      # Collaborators never see the underlying technology or port.
+      - PARSER_URL=http://extraction-engine:8070/api/processCitation
+      - PYTHONUTF8=1
+    volumes:
+      # Mount a local ./data folder to /data inside the container.
+      # Put input.json here; results and reports are written back here.
+      - ./data:/data
+    networks:
+      - internal
+    depends_on:
+      extraction-engine:
+        condition: service_healthy
+
+# ── Isolated internal network (no host port exposure) ─────────────────────────
+networks:
+  internal:
+    driver: bridge

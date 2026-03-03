@@ -1,0 +1,13 @@
+# ──────────────────────────────────────────────────
+#  Reference Section Quality Pipeline
+#  Python >= 3.9
+# ──────────────────────────────────────────────────
+
+# HTTP client — used by pipeline.py, reference_parser.py, checks/check_doi.py
+requests>=2.31.0
+
+# Progress bars — used by reference_parser.py batch mode
+tqdm>=4.66.0
+
+# XML parsing — used by reference_parser.py to parse GROBID TEI responses
+lxml>=5.1.0
