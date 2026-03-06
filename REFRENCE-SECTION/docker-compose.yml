@@ -1,5 +1,3 @@
-version: "3.9"
-
 # ─────────────────────────────────────────────────────────────────────────────
 #  Reference Section Quality Pipeline
 #
@@ -28,11 +26,11 @@ services:
     networks:
       - internal
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8070/api/isalive || exit 1"]
-      interval: 15s
-      timeout: 5s
-      retries: 10
-      start_period: 45s   # GROBID JVM startup takes ~30-40 seconds
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/localhost/8070 && echo -e \"GET /api/isalive HTTP/1.0\\r\\n\\r\\n\" >&3 && cat <&3 | grep -q \"true\"' || exit 1"]
+      interval: 20s
+      timeout: 10s
+      retries: 15
+      start_period: 90s   # GROBID loads ~12 Wapiti models — allow up to 90s
 
   # ── Python pipeline ────────────────────────────────────────────────────────
   pipeline:
