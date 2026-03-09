@@ -1,25 +1,28 @@
 # ─────────────────────────────────────────────────────────────────────────────
-#  Reference Section Quality Pipeline
+#  Reference Section Quality API
 #
 #  Services:
-#    extraction-engine  — field extraction model (internal network only)
-#    pipeline           — Python quality checks and reporting
+#    extraction-engine  — field extraction model (internal, not exposed to host)
+#    api                — FastAPI service exposed on host port 8000
 #
-#  Quick start (collaborator):
-#    1. docker compose pull
-#    2. docker compose up -d extraction-engine
-#    3. docker compose run --rm pipeline /data/input.json \
-#         --output /data/results.json --report /data/report.txt
+#  Quick start:
+#    1. cp .env.example .env          # set EXTRACTOR_IMAGE (and optionally API_PORT)
+#    2. docker compose up -d          # starts both services
+#    3. curl http://localhost:8000/health
+#    4. POST to http://localhost:8000/analyze   (see /docs for schema)
 #
-#  Set EXTRACTOR_IMAGE in a .env file or export it before running:
+#  Interactive API docs (Swagger UI):
+#    http://localhost:8000/docs
+#
+#  Set EXTRACTOR_IMAGE in .env:
 #    EXTRACTOR_IMAGE=ghcr.io/06hardik/extraction-engine:1.0
 # ─────────────────────────────────────────────────────────────────────────────
 
 services:
 
   # ── Field extraction model ─────────────────────────────────────────────────
-  # This service is NOT exposed on any host port — it is reachable only by the
-  # pipeline container on the internal Docker bridge network.
+  # Internal only — reachable by the api service via Docker bridge network.
+  # Not exposed on any host port.
   extraction-engine:
     image: ${EXTRACTOR_IMAGE:?Set EXTRACTOR_IMAGE in .env or environment}
     restart: unless-stopped
@@ -32,27 +35,39 @@ services:
       retries: 15
       start_period: 90s   # GROBID loads ~12 Wapiti models — allow up to 90s
 
-  # ── Python pipeline ────────────────────────────────────────────────────────
-  pipeline:
+  # ── Reference Quality API ──────────────────────────────────────────────────
+  # FastAPI service. Accepts POST /analyze with a JSON reference list and
+  # returns a full quality report. Exposed on host port 8000.
+  #
+  # Swagger UI (interactive docs):  http://localhost:8000/docs
+  # Health check:                   http://localhost:8000/health
+  api:
     build:
       context: .
       dockerfile: Dockerfile
+    ports:
+      # host_port:container_port
+      # Override the host port via API_PORT in .env:  API_PORT=9000
+      - "${API_PORT:-8000}:8000"
     environment:
       # Points at the extraction-engine container via Docker's internal DNS.
-      # Collaborators never see the underlying technology or port.
       - PARSER_URL=http://extraction-engine:8070/api/processCitation
       - PYTHONUTF8=1
-    volumes:
-      # Mount a local ./data folder to /data inside the container.
-      # Put input.json here; results and reports are written back here.
-      - ./data:/data
     networks:
       - internal
+    restart: unless-stopped
     depends_on:
       extraction-engine:
         condition: service_healthy
+    healthcheck:
+      # Uses Python's built-in urllib — no curl/wget needed in the container.
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\" || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 15s
 
-# ── Isolated internal network (no host port exposure) ─────────────────────────
+# ── Isolated internal network (no host port exposure for extraction engine) ───
 networks:
   internal:
     driver: bridge

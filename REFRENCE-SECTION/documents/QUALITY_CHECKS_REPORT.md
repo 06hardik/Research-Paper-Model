@@ -323,6 +323,93 @@ After hard filters, each remaining style accumulates points based on weighted pa
 
 ---
 
+## API Service
+
+The pipeline is deployed as a standalone HTTP service (`api.py`) built with FastAPI. Any project can call it over the network without installing or knowing anything about the underlying Python code.
+
+### Endpoints
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/analyze` | Submit a reference list; returns the full quality report |
+| `GET` | `/health` | Liveness check; reports whether the extraction engine is reachable |
+| `GET` | `/docs` | Interactive Swagger UI (auto-generated from code) |
+| `GET` | `/redoc` | ReDoc documentation UI |
+
+### POST /analyze — request body
+
+```json
+{
+  "entries": [
+    {
+      "id":       "ref_001",
+      "raw_text": "J. Smith, \"Deep learning,\" IEEE Trans. Neural Netw., vol. 31, no. 2, pp. 45–52, 2020.",
+      "metadata": {}
+    }
+  ],
+  "dry_run":        false,
+  "deep_doi":       false,
+  "crossref_email": null
+}
+```
+
+| Field | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `entries` | array | Yes | — | Ordered list of citation objects |
+| `entries[].id` | string | No | auto-assigned | Unique identifier; auto-set to `ref_001`, `ref_002` … if omitted |
+| `entries[].raw_text` | string | Yes | — | Raw citation string |
+| `entries[].metadata` | object | No | `{}` | Arbitrary pass-through data |
+| `dry_run` | bool | No | `false` | Skip field extraction; run classifier and checks on raw text only |
+| `deep_doi` | bool | No | `false` | Query CrossRef API to confirm missing DOIs |
+| `crossref_email` | string | No | `null` | Email for CrossRef polite-pool (higher rate limit) |
+
+### POST /analyze — response
+
+The response is the same JSON document that `pipeline.run()` produces:
+
+```json
+{
+  "generated_at": "2026-03-09T10:30:00Z",
+  "summary": {
+    "total": 5,
+    "style": "IEEE",
+    "style_confidence": "HIGH",
+    "checks_passed": ["ordering", "doi", "journal_casing"],
+    "checks_failed": ["completeness"],
+    "total_issues": 3,
+    "parsed_ok": 5,
+    "parsed_failed": 0
+  },
+  "list_level_issues": [...],
+  "entries": [...]
+}
+```
+
+### HTTP error codes
+
+| Code | Cause |
+|---|---|
+| `422` | `entries` is empty or the request body does not match the schema |
+| `503` | Extraction engine is not reachable and `dry_run` was not set |
+
+### Deployment
+
+The service is containerised. Both the extraction engine and the API container are started with a single command:
+
+```bash
+docker compose up -d
+```
+
+The API is then available at `http://localhost:8000`. The extraction engine is on the internal Docker network only and is never directly exposed to the host.
+
+To override the host port, set `API_PORT` in `.env`:
+
+```
+API_PORT=9000
+```
+
+---
+
 ## Output
 
 Each check contributes its findings to a unified output available in two forms:
