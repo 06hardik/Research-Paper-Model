@@ -205,6 +205,12 @@ def analyze(req: AnalyzeRequest) -> Dict[str, Any]:
 
     Set `dry_run: true` if the extraction engine is not running — the pipeline
     will still classify entries and run all checks using the raw text.
+    
+    NOTE: On Render (and other cloud deployments), the extraction engine may not 
+    be available. In this case, the API will automatically use dry_run mode, which:
+    - Skips field extraction (parsing titles, authors, etc.)
+    - Still performs style classification and quality checks on raw text
+    - Is faster but provides less detailed information
     """
     if not req.entries:
         raise HTTPException(status_code=422, detail="entries list must not be empty")
@@ -213,26 +219,46 @@ def analyze(req: AnalyzeRequest) -> Dict[str, Any]:
     entries_dicts: List[Dict[str, Any]] = [e.model_dump() for e in req.entries]
 
     parser_url = os.environ.get("PARSER_URL", PARSER_ENDPOINT)
+    
+    # Check if extraction engine is available
+    parser_available = check_parser_alive(parser_url)
+    
+    # If user didn't request dry_run but parser is not available, auto-enable it
+    use_dry_run = req.dry_run or not parser_available
 
     log.info(
-        "analyze() called: %d entries, dry_run=%s, deep_doi=%s",
-        len(entries_dicts), req.dry_run, req.deep_doi,
+        "analyze() called: %d entries, dry_run=%s (user requested=%s, parser available=%s), deep_doi=%s",
+        len(entries_dicts), use_dry_run, req.dry_run, parser_available, req.deep_doi,
     )
 
     try:
         result = run(
             entries        = entries_dicts,
             parser_url     = parser_url,
-            dry_run        = req.dry_run,
+            dry_run        = use_dry_run,
             deep_doi       = req.deep_doi,
             crossref_email = req.crossref_email,
         )
+        
+        # Add a note in the response if dry_run was auto-enabled
+        if use_dry_run and not parser_available:
+            if "summary" not in result:
+                result["summary"] = {}
+            result["summary"]["_note"] = (
+                "Extraction engine not available. Running in dry_run mode: "
+                "style classification and checks performed on raw text only (no field parsing)."
+            )
+        
     except ValueError as exc:
         # e.g. empty entries list (double-checked above, but kept for safety)
         raise HTTPException(status_code=422, detail=str(exc))
     except RuntimeError as exc:
-        # Extraction engine not reachable
-        raise HTTPException(status_code=503, detail=str(exc))
+        # Extraction engine not reachable and dry_run is False
+        raise HTTPException(
+            status_code=503, 
+            detail=f"Field extraction not available: {str(exc)}. "
+                   "Try setting dry_run=true to continue without field extraction."
+        )
 
     return result
 
