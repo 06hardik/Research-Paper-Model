@@ -26,6 +26,9 @@ services:
   extraction-engine:
     image: ${EXTRACTOR_IMAGE:?Set EXTRACTOR_IMAGE in .env or environment}
     restart: unless-stopped
+    ports :
+      # No host port:container port mapping — internal only.
+      - "8070:8070"
     networks:
       - internal
     healthcheck:
