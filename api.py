@@ -37,10 +37,10 @@ Response → same JSON schema as pipeline.run()
 
 Environment variables
 ---------------------
-  PARSER_URL   URL of the field extraction service
-               default: http://localhost:8070/api/processCitation
-  API_PORT     Port for uvicorn to bind
-               default: 8000  (can also be set via uvicorn --port flag)
+    PARSER_URL   URL of the field extraction service (/api/processCitation)
+                             required for non-dry-run requests in hosted deployments
+    API_PORT     Port for uvicorn to bind
+                             default: 8000  (can also be set via uvicorn --port flag)
 """
 
 from __future__ import annotations
@@ -49,11 +49,11 @@ import logging
 import os
 from typing import Any, Dict, List, Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from pipeline import run, PARSER_ENDPOINT
+from pipeline import run
 from reference_parser import check_parser_alive
 
 # ---------------------------------------------------------------------------
@@ -84,6 +84,11 @@ app.add_middleware(
 
 logging.basicConfig(level=logging.WARNING, format="%(levelname)s  %(message)s")
 log = logging.getLogger(__name__)
+
+
+def _get_parser_url() -> str:
+    """Resolve parser URL from environment for API requests."""
+    return (os.environ.get("PARSER_URL") or "").strip()
 
 
 # ---------------------------------------------------------------------------
@@ -178,12 +183,13 @@ def health() -> Dict[str, Any]:
     Also reports whether the extraction engine (GROBID) is reachable,
     so callers can decide whether to use `dry_run` mode.
     """
-    parser_url = os.environ.get("PARSER_URL", PARSER_ENDPOINT)
-    reachable  = check_parser_alive(parser_url)
+    parser_url = _get_parser_url()
+    reachable  = bool(parser_url) and check_parser_alive(parser_url)
     return {
         "status":           "ok",
+        "parser_configured": bool(parser_url),
         "parser_reachable": reachable,
-        "parser_url":       parser_url,
+        "parser_url":       parser_url or None,
     }
 
 
@@ -193,7 +199,7 @@ def health() -> Dict[str, Any]:
     tags=["pipeline"],
     response_description="Full quality report for the submitted reference list",
 )
-def analyze(req: AnalyzeRequest) -> Dict[str, Any]:
+def analyze(req: AnalyzeRequest, response: Response) -> Dict[str, Any]:
     """
     Submit a reference list for quality analysis.
 
@@ -212,7 +218,7 @@ def analyze(req: AnalyzeRequest) -> Dict[str, Any]:
     # Convert Pydantic models → plain dicts for pipeline.run()
     entries_dicts: List[Dict[str, Any]] = [e.model_dump() for e in req.entries]
 
-    parser_url = os.environ.get("PARSER_URL", PARSER_ENDPOINT)
+    parser_url = _get_parser_url()
 
     log.info(
         "analyze() called: %d entries, dry_run=%s, deep_doi=%s",
@@ -233,6 +239,11 @@ def analyze(req: AnalyzeRequest) -> Dict[str, Any]:
     except RuntimeError as exc:
         # Extraction engine not reachable
         raise HTTPException(status_code=503, detail=str(exc))
+
+    processing_status = str(result.get("processing_status") or "ok")
+    response.headers["X-Processing-Status"] = processing_status
+    parser_summary = result.get("parser_summary") or {}
+    response.headers["X-Parser-Success-Rate"] = str(parser_summary.get("success_rate", ""))
 
     return result
 

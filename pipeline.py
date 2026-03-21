@@ -82,14 +82,14 @@ from checks.check_style_conformity import check_style_conformity
 # Configuration defaults
 # ---------------------------------------------------------------------------
 
-# PARSER_URL env var lets docker-compose wire the extraction service automatically
-# without requiring any extra CLI flags from the caller.
+# PARSER_URL is expected in hosted/API deployments. Keep localhost only as a
+# CLI/dev fallback reference; run() resolves env explicitly at runtime.
 PARSER_ENDPOINT  = os.environ.get(
     "PARSER_URL", "http://localhost:8070/api/processCitation"
 )
-NUM_WORKERS     = 8
-REQUEST_TIMEOUT = 15
-MAX_RETRIES     = 3
+NUM_WORKERS     = int(os.environ.get("PARSER_WORKERS", "4"))
+REQUEST_TIMEOUT = int(os.environ.get("PARSER_TIMEOUT", "25"))
+MAX_RETRIES     = int(os.environ.get("PARSER_RETRIES", "5"))
 
 logging.basicConfig(level=logging.WARNING, format="%(levelname)s  %(message)s")
 log = logging.getLogger(__name__)
@@ -337,9 +337,20 @@ def _assemble_output(
     checks_failed:     List[str],
 ) -> Dict[str, Any]:
     """Assemble the final output document."""
+    total = len(entries)
     parsed_ok   = sum(1 for e in entries
                       if (e.get("parsed") or {}).get("parser_status") == "ok")
-    parsed_fail = len(entries) - parsed_ok
+    parsed_fail = total - parsed_ok
+
+    if parsed_ok == total:
+        processing_status = "ok"
+        suggested_http_status = 200
+    elif parsed_ok == 0:
+        processing_status = "failed"
+        suggested_http_status = 503
+    else:
+        processing_status = "partial"
+        suggested_http_status = 207
 
     output_entries = []
     for entry in entries:
@@ -355,8 +366,16 @@ def _assemble_output(
 
     return {
         "generated_at": datetime.utcnow().isoformat() + "Z",
+        "processing_status": processing_status,
+        "parser_summary": {
+            "total": total,
+            "parsed_ok": parsed_ok,
+            "parsed_failed": parsed_fail,
+            "success_rate": round(parsed_ok / max(total, 1), 4),
+            "suggested_http_status": suggested_http_status,
+        },
         "summary": {
-            "total":            len(entries),
+            "total":            total,
             "style":            dominant_style,
             "style_confidence": style_confidence,
             "checks_passed":    checks_passed,
@@ -581,7 +600,7 @@ def _text_report(output: Dict[str, Any]) -> str:
 
 def run(
     entries:        List[Dict[str, Any]],
-    parser_url:     str           = PARSER_ENDPOINT,
+    parser_url:     Optional[str] = None,
     workers:        int           = NUM_WORKERS,
     timeout:        int           = REQUEST_TIMEOUT,
     dry_run:        bool          = False,
@@ -594,7 +613,7 @@ def run(
     Parameters
     ----------
     entries        : list of {"id": ..., "raw_text": ..., "metadata": {...}}
-    parser_url     : field extraction model endpoint
+    parser_url     : field extraction model endpoint (falls back to PARSER_URL env var)
     workers        : concurrent worker threads
     timeout        : per-request timeout in seconds
     dry_run        : if True, skip field extraction
@@ -613,16 +632,34 @@ def run(
         if not e.get("id"):
             e["id"] = f"ref_{i+1:03d}"
 
+    # Resolve parser endpoint from arg/env once per request.
+    resolved_parser_url = (parser_url or os.environ.get("PARSER_URL") or "").strip()
+
     # Step 1: Grobid
     if dry_run:
         entries = run_parser_dry(entries)
     else:
-        if not check_parser_alive(parser_url):
+        if not resolved_parser_url:
             raise RuntimeError(
-                f"Field extraction model not reachable at {parser_url}\n"
+                "PARSER_URL is not configured for extraction. "
+                "Set PARSER_URL to a reachable /api/processCitation endpoint."
+            )
+
+        if not check_parser_alive(resolved_parser_url):
+            raise RuntimeError(
+                f"Field extraction model not reachable at {resolved_parser_url}\n"
                 "  Ensure the extraction service is running and accessible."
             )
-        entries = run_parser_batch(entries, parser_url, timeout, workers)
+        entries = run_parser_batch(entries, resolved_parser_url, timeout, workers)
+
+        parsed_ok = sum(
+            1 for e in entries if (e.get("parsed") or {}).get("parser_status") == "ok"
+        )
+        if parsed_ok == 0:
+            raise RuntimeError(
+                "Extraction backend responded but no entries were parsed successfully. "
+                "Please retry; if this persists, check parser service capacity/logs."
+            )
 
     # Step 2: Classify
     dominant_style, style_confidence = _detect_dominant_style(entries)

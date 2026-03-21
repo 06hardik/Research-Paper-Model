@@ -32,10 +32,10 @@ from __future__ import annotations
 INPUT_FILE      = "test.json"
 OUTPUT_FILE     = "parsed_references.json"
 PARSER_ENDPOINT  = "http://localhost:8070/api/processCitation"
-NUM_WORKERS     = 8
-REQUEST_TIMEOUT = 15
-MAX_RETRIES     = 3
-RETRY_DELAY     = 2.0
+NUM_WORKERS     = 4
+REQUEST_TIMEOUT = 25
+MAX_RETRIES     = 5
+RETRY_DELAY     = 1.5
 # ══════════════════════════════════════════════════════════════════════
 
 import argparse
@@ -131,26 +131,33 @@ def call_parser(
         "citations":            text,
         "consolidateCitations": "0",
     }
+    retryable_statuses = {429, 500, 502, 503, 504}
+
     for attempt in range(1, retries + 1):
         try:
             resp = session.post(url, data=payload, timeout=timeout)
             if resp.status_code == 200:
                 body = resp.content.strip()
                 return body if body else None
-            if resp.status_code == 503:
+
+            if resp.status_code in retryable_statuses:
                 if attempt < retries:
-                    time.sleep(delay * attempt)
+                    wait = delay * (2 ** (attempt - 1))
+                    time.sleep(wait)
                 continue
+
             log.debug("HTTP %d for: %.60s", resp.status_code, text)
             return None
         except requests.exceptions.ConnectionError as exc:
             log.debug("Connection error attempt %d/%d: %s", attempt, retries, exc)
             if attempt < retries:
-                time.sleep(delay * attempt)
+                wait = delay * (2 ** (attempt - 1))
+                time.sleep(wait)
         except requests.exceptions.Timeout:
             log.debug("Timeout attempt %d/%d", attempt, retries)
             if attempt < retries:
-                time.sleep(delay)
+                wait = delay * (2 ** (attempt - 1))
+                time.sleep(wait)
     return None
 
 
