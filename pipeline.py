@@ -64,6 +64,10 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 
+from env_loader import load_env_file
+
+load_env_file()
+
 from citation_classifier import classify
 from reference_parser import (
     call_parser,
