@@ -2,27 +2,35 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install Python dependencies
+ENV PYTHONDONTWRITEBYTECODE=1 \
+	PYTHONUNBUFFERED=1 \
+	PYTHONUTF8=1 \
+	API_PORT=8000 \
+	UVICORN_WORKERS=1
+
+# Install Python dependencies first for better layer caching.
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --upgrade pip \
+	&& pip install --no-cache-dir -r requirements.txt
 
-# Copy source code
-COPY citation_classifier.py  .
-COPY reference_parser.py     .
-COPY pipeline.py             .
-COPY api.py                  .
-COPY checks/                 ./checks/
+# Copy source code needed by the API entrypoint.
+COPY api.py .
+COPY pipeline.py .
+COPY citation_classifier.py .
+COPY reference_parser.py .
+COPY env_loader.py .
+COPY checks ./checks
 
-# Create a directory for user-mounted input/output data
-RUN mkdir /data
+# Run container as non-root user for safer deployment.
+RUN adduser --disabled-password --gecos "" appuser \
+	&& chown -R appuser:appuser /app
+USER appuser
 
-# PYTHONUTF8=1 avoids cp1252 UnicodeEncodeError on Windows report symbols
-ENV PYTHONUTF8=1
-
-# Expose the API port
 EXPOSE 8000
 
-# Start the FastAPI service via uvicorn
-# Override CMD to run pipeline.py directly for one-off CLI use:
-#   docker run --rm <image> python pipeline.py --help
-ENTRYPOINT ["uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8000"]
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+	CMD python -c "import os,urllib.request; port=os.getenv('API_PORT','8000'); urllib.request.urlopen(f'http://127.0.0.1:{port}/health', timeout=4)" || exit 1
+
+# Default startup used by docker compose.
+# You can override this command in compose.yml for one-off tasks.
+CMD ["sh", "-c", "uvicorn api:app --host 0.0.0.0 --port ${API_PORT:-8000} --workers ${UVICORN_WORKERS:-1}"]
